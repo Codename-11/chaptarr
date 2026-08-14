@@ -1029,9 +1029,10 @@ namespace NzbDrone.Core.Books
             Author requestedAuthor,
             IReadOnlyCollection<string> requestedEditionProviderIds)
         {
+            var authorHint = AuthorIdentity.GetWorkLookupAuthorHintForProviderId(requestedAuthor, lookupId);
+
             try
             {
-                var authorHint = AuthorIdentity.GetWorkLookupAuthorHintForProviderId(requestedAuthor, lookupId);
                 var exactWork = _bookInfo.GetWorkInfo(lookupId, requestedMediaType, authorHint)?.Item2;
                 if (exactWork != null)
                 {
@@ -1041,6 +1042,26 @@ namespace NzbDrone.Core.Books
             catch (BookNotFoundException)
             {
                 _logger.Debug("[ADD-HYDRATE] Exact work lookup did not resolve {0}; falling back to search", lookupId);
+            }
+
+            var authorProviderId = authorHint ?? AuthorIdentity.GetPreferredProviderId(requestedAuthor);
+            if (!string.IsNullOrWhiteSpace(authorProviderId))
+            {
+                try
+                {
+                    var remoteAuthor = _authorInfo.GetAuthorInfo(authorProviderId, useCache: false);
+                    var authorBook = remoteAuthor?.Books?
+                        .Where(b => b != null && b.MediaType == requestedMediaType)
+                        .FirstOrDefault(b => BookIdentity.GetStableWorkProviderIdentityTokens(b).Contains(lookupId));
+                    if (authorBook != null)
+                    {
+                        return authorBook;
+                    }
+                }
+                catch (AuthorNotFoundException)
+                {
+                    _logger.Debug("[ADD-HYDRATE] Author catalog lookup did not resolve {0}; falling back to search", authorProviderId);
+                }
             }
 
             var candidates = _bookSearch.SearchForNewBook(lookupId, author: null) ?? new List<Book>();

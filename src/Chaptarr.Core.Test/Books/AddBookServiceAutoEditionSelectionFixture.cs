@@ -202,12 +202,33 @@ namespace Chaptarr.Core.Test.Books
             public Tuple<string, Book, List<Author>> GetEditionInfo(string id, BookMediaType mediaType = BookMediaType.Audiobook) => throw new NotImplementedException();
         }
 
+        private sealed class StubAuthorInfo : IProvideAuthorInfo
+        {
+            private readonly Author _author;
+
+            public StubAuthorInfo(Author author)
+            {
+                _author = author;
+            }
+
+            public int GetAuthorInfoCalls { get; private set; }
+
+            public Author GetAuthorInfo(string chaptarrId, bool useCache = true)
+            {
+                GetAuthorInfoCalls++;
+                return _author;
+            }
+
+            public global::NzbDrone.Core.MetadataSource.BookInfo.RefreshResult RefreshAuthorInfo(string authorId, string etag = null, bool forceRefresh = false, string expectedPublishedETag = null, bool bypassEtag = false) => throw new NotImplementedException();
+        }
+
         private static AddBookService BuildService(
             IAuthorService authorService,
             IBookService bookService,
             IEditionService editionService,
             IMetadataProfileService metadataProfileService,
-            IProvideBookInfo bookInfo = null)
+            IProvideBookInfo bookInfo = null,
+            IProvideAuthorInfo authorInfo = null)
         {
             return new AddBookService(
                 authorService,
@@ -218,7 +239,7 @@ namespace Chaptarr.Core.Test.Books
                 DispatchProxy.Create<IImportListExclusionService, ThrowingProxy<IImportListExclusionService>>(),
                 DispatchProxy.Create<ISeriesBookLinkService, ThrowingProxy<ISeriesBookLinkService>>(),
                 DispatchProxy.Create<ISeriesService, ThrowingProxy<ISeriesService>>(),
-                DispatchProxy.Create<IProvideAuthorInfo, ThrowingProxy<IProvideAuthorInfo>>(),
+                authorInfo ?? DispatchProxy.Create<IProvideAuthorInfo, ThrowingProxy<IProvideAuthorInfo>>(),
                 DispatchProxy.Create<IBuildFileNames, ThrowingProxy<IBuildFileNames>>(),
                 DispatchProxy.Create<IMonitoringService, ThrowingProxy<IMonitoringService>>(),
                 editionService,
@@ -1377,6 +1398,52 @@ namespace Chaptarr.Core.Test.Books
 
             Assert.That(result, Is.SameAs(hydratedBook));
             Assert.That(bookInfo.GetWorkInfoCalls, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void should_fall_back_to_matching_ebook_in_author_catalog_when_exact_work_lookup_is_empty()
+        {
+            var requestedAuthor = new Author { Id = 11, HardcoverAuthorId = "hc:168073" };
+            var matchingEbook = new Book
+            {
+                Title = "All Systems Red",
+                HardcoverBookId = "hc:427971",
+                MediaType = BookMediaType.Ebook,
+                Editions = new List<Edition>
+                {
+                    new Edition
+                    {
+                        ForeignEditionId = "hc-ed:ebook",
+                        Language = "eng",
+                        ReadingFormatId = 3
+                    }
+                }
+            };
+            var remoteAuthor = new Author
+            {
+                HardcoverAuthorId = requestedAuthor.HardcoverAuthorId,
+                Books = new List<Book>
+                {
+                    new Book { HardcoverBookId = "hc:427971", MediaType = BookMediaType.Audiobook },
+                    matchingEbook,
+                    new Book { HardcoverBookId = "hc:other", MediaType = BookMediaType.Ebook }
+                }
+            };
+            var bookInfo = new StubBookInfo((id, mediaType, authorHint) => null);
+            var authorInfo = new StubAuthorInfo(remoteAuthor);
+            var service = BuildService(
+                new StubAuthorService(requestedAuthor),
+                new StubBookService(),
+                new StubEditionService(Array.Empty<Edition>()),
+                new StubMetadataProfileService(),
+                bookInfo,
+                authorInfo);
+
+            var result = InvokeHydrateBookForAdd(service, "hc:427971", BookMediaType.Ebook, requestedAuthor);
+
+            Assert.That(result, Is.SameAs(matchingEbook));
+            Assert.That(bookInfo.GetWorkInfoCalls, Is.EqualTo(1));
+            Assert.That(authorInfo.GetAuthorInfoCalls, Is.EqualTo(1));
         }
 
         [Test]
