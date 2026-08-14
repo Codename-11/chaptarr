@@ -142,12 +142,11 @@ namespace NzbDrone.Core.Books
                         var requestedEbookMonitored = book.EbookMonitored;
                         var requestedAdded = book.Added;
 
-                        var candidates = _bookSearch.SearchForNewBook(lookupId, author: null) ?? new List<Book>();
-
-                        var hydrated = candidates.FirstOrDefault(b => b != null && b.MediaType == requestedMediaType)
-                                      ?? candidates.FirstOrDefault(b =>
-                                          requestedEditionProviderIdsForAdd.Any() &&
-                                          b?.Editions?.Any(e => requestedEditionProviderIdsForAdd.Any(id => BookEditionIdentity.EditionMatchesProviderId(e, id))) == true);
+                        var hydrated = HydrateBookForAdd(
+                            lookupId,
+                            requestedMediaType,
+                            requestedAuthor,
+                            requestedEditionProviderIdsForAdd);
 
                         if (hydrated != null)
                         {
@@ -1022,6 +1021,33 @@ namespace NzbDrone.Core.Books
             }
 
             return !SelectRetainedEditionsForAdd(book, book.Editions).Any();
+        }
+
+        private Book HydrateBookForAdd(
+            string lookupId,
+            BookMediaType requestedMediaType,
+            Author requestedAuthor,
+            IReadOnlyCollection<string> requestedEditionProviderIds)
+        {
+            try
+            {
+                var authorHint = AuthorIdentity.GetWorkLookupAuthorHintForProviderId(requestedAuthor, lookupId);
+                var exactWork = _bookInfo.GetWorkInfo(lookupId, requestedMediaType, authorHint)?.Item2;
+                if (exactWork != null)
+                {
+                    return exactWork;
+                }
+            }
+            catch (BookNotFoundException)
+            {
+                _logger.Debug("[ADD-HYDRATE] Exact work lookup did not resolve {0}; falling back to search", lookupId);
+            }
+
+            var candidates = _bookSearch.SearchForNewBook(lookupId, author: null) ?? new List<Book>();
+            return candidates.FirstOrDefault(b => b != null && b.MediaType == requestedMediaType)
+                   ?? candidates.FirstOrDefault(b =>
+                       requestedEditionProviderIds.Any() &&
+                       b?.Editions?.Any(e => requestedEditionProviderIds.Any(id => BookEditionIdentity.EditionMatchesProviderId(e, id))) == true);
         }
 
         private string ResolveAddHydrationLookupId(Book book)

@@ -180,17 +180,40 @@ namespace Chaptarr.Core.Test.Books
             public List<Book> FilterBooks(Author input, int profileId) => throw new NotImplementedException();
         }
 
+        private sealed class StubBookInfo : IProvideBookInfo
+        {
+            private readonly Func<string, BookMediaType, string, Tuple<string, Book, List<Author>>> _getWorkInfo;
+
+            public StubBookInfo(Func<string, BookMediaType, string, Tuple<string, Book, List<Author>>> getWorkInfo)
+            {
+                _getWorkInfo = getWorkInfo;
+            }
+
+            public int GetWorkInfoCalls { get; private set; }
+
+            public Tuple<string, Book, List<Author>> GetBookInfo(string id, BookMediaType mediaType = BookMediaType.Audiobook, string authorHintProviderId = null) => throw new NotImplementedException();
+
+            public Tuple<string, Book, List<Author>> GetWorkInfo(string id, BookMediaType mediaType = BookMediaType.Audiobook, string authorHintProviderId = null)
+            {
+                GetWorkInfoCalls++;
+                return _getWorkInfo(id, mediaType, authorHintProviderId);
+            }
+
+            public Tuple<string, Book, List<Author>> GetEditionInfo(string id, BookMediaType mediaType = BookMediaType.Audiobook) => throw new NotImplementedException();
+        }
+
         private static AddBookService BuildService(
             IAuthorService authorService,
             IBookService bookService,
             IEditionService editionService,
-            IMetadataProfileService metadataProfileService)
+            IMetadataProfileService metadataProfileService,
+            IProvideBookInfo bookInfo = null)
         {
             return new AddBookService(
                 authorService,
                 DispatchProxy.Create<IAuthorLibraryService, ThrowingProxy<IAuthorLibraryService>>(),
                 bookService,
-                DispatchProxy.Create<IProvideBookInfo, ThrowingProxy<IProvideBookInfo>>(),
+                bookInfo ?? DispatchProxy.Create<IProvideBookInfo, ThrowingProxy<IProvideBookInfo>>(),
                 DispatchProxy.Create<ISearchForNewBook, ThrowingProxy<ISearchForNewBook>>(),
                 DispatchProxy.Create<IImportListExclusionService, ThrowingProxy<IImportListExclusionService>>(),
                 DispatchProxy.Create<ISeriesBookLinkService, ThrowingProxy<ISeriesBookLinkService>>(),
@@ -203,6 +226,17 @@ namespace Chaptarr.Core.Test.Books
                 new EditionMetadataProfileFilter(new TestTermMatcherService()),
                 metadataProfileService,
                 LogManager.GetCurrentClassLogger());
+        }
+
+        private static Book InvokeHydrateBookForAdd(AddBookService service, string lookupId, BookMediaType mediaType, Author author)
+        {
+            var method = typeof(AddBookService).GetMethod("HydrateBookForAdd", BindingFlags.NonPublic | BindingFlags.Instance);
+            if (method == null)
+            {
+                throw new InvalidOperationException("Could not find AddBookService.HydrateBookForAdd via reflection");
+            }
+
+            return (Book)method.Invoke(service, new object[] { lookupId, mediaType, author, Array.Empty<string>() });
         }
 
         private static void InvokeEnsureAutoSelectedEdition(AddBookService service, Book book)
@@ -1299,6 +1333,50 @@ namespace Chaptarr.Core.Test.Books
                 new StubMetadataProfileService(profile));
 
             Assert.That(InvokeShouldHydrateAddPayload(service, book), Is.True);
+        }
+
+        [Test]
+        public void should_use_exact_work_lookup_to_hydrate_hardcover_add_payload()
+        {
+            var author = new Author { Id = 11, HardcoverAuthorId = "hc:168073" };
+            var hydratedBook = new Book
+            {
+                Title = "All Systems Red",
+                HardcoverBookId = "hc:427971",
+                MediaType = BookMediaType.Ebook,
+                Editions = new List<Edition>
+                {
+                    new Edition
+                    {
+                        ForeignEditionId = "hc-ed:123",
+                        Title = "All Systems Red",
+                        Language = "eng",
+                        ReadingFormatId = 3
+                    }
+                }
+            };
+            var bookInfo = new StubBookInfo((id, mediaType, authorHint) =>
+            {
+                Assert.Multiple(() =>
+                {
+                    Assert.That(id, Is.EqualTo("hc:427971"));
+                    Assert.That(mediaType, Is.EqualTo(BookMediaType.Ebook));
+                    Assert.That(authorHint, Is.EqualTo("hc:168073"));
+                });
+
+                return Tuple.Create(author.HardcoverAuthorId, hydratedBook, new List<Author> { author });
+            });
+            var service = BuildService(
+                new StubAuthorService(author),
+                new StubBookService(),
+                new StubEditionService(Array.Empty<Edition>()),
+                new StubMetadataProfileService(),
+                bookInfo);
+
+            var result = InvokeHydrateBookForAdd(service, "hc:427971", BookMediaType.Ebook, author);
+
+            Assert.That(result, Is.SameAs(hydratedBook));
+            Assert.That(bookInfo.GetWorkInfoCalls, Is.EqualTo(1));
         }
 
         [Test]
