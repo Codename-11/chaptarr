@@ -16,7 +16,7 @@ The fork's default branch is `deploy` so operational builds and GitHub workflow 
 
 The fix keeps unrelated author titles out of the local catalog when a new author is added with `Only This Book`, while preserving the selected title through Chaptarr's existing manual-add path.
 
-`deploy` also carries the media-specific text lookup fix from `fix/book-lookup-media-types` (`d24f9bd`). The focused branch is ready for upstream review but has not been submitted. It resolves lightweight Goodreads search hits through their canonical work records before filtering by media type, and only returns ebook or audiobook instances backed by matching edition metadata.
+`deploy` also carries the media-specific text lookup fix from `fix/book-lookup-media-types` (`58bbd30`). The focused branch is ready for upstream review but has not been submitted. It resolves lightweight Goodreads search hits through their canonical work records before filtering by media type, and only returns ebook or audiobook instances backed by matching edition metadata.
 
 ## Upstream sync
 
