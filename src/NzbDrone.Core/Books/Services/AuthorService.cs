@@ -28,12 +28,11 @@ namespace NzbDrone.Core.Books
         Author FindByName(string title);
         Author FindByNameInexact(string title);
         List<Author> GetCandidates(string title);
-        List<Author> GetReportCandidates(string reportTitle);
 	        void DeleteAuthor(int authorId, bool deleteFiles, bool addImportListExclusion = false);
             // Purge/re-add deliberately retains files, so production must preserve the import
             // history that prevents a still-seeding download from being imported again.
             // The default exists only for lightweight test doubles.
-            void DeleteAuthorForReadd(int authorId)
+            List<int> DeleteAuthorForReadd(int authorId)
             {
                 throw new NotSupportedException();
             }
@@ -309,9 +308,9 @@ namespace NzbDrone.Core.Books
 	            DeleteAuthorsInternal(new List<int> { authorId }, deleteFiles, addImportListExclusion, false);
 	        }
 
-	        public void DeleteAuthorForReadd(int authorId)
+	        public List<int> DeleteAuthorForReadd(int authorId)
 	        {
-	            DeleteAuthorsInternal(new List<int> { authorId }, false, false, true);
+	            return DeleteAuthorsInternal(new List<int> { authorId }, false, false, true);
 	        }
 
 	        public void DeleteAuthors(List<int> authorIds, bool deleteFiles, bool addImportListExclusion = false)
@@ -319,12 +318,13 @@ namespace NzbDrone.Core.Books
 	            DeleteAuthorsInternal(authorIds, deleteFiles, addImportListExclusion, false);
 	        }
 
-	        private void DeleteAuthorsInternal(
+	        private List<int> DeleteAuthorsInternal(
 	            List<int> authorIds,
 	            bool deleteFiles,
 	            bool addImportListExclusion,
 	            bool preserveRetainedFileHistory)
 	        {
+	            var retainedBookFileIds = new List<int>();
 	            var distinctIds = (authorIds ?? new List<int>())
 	                .Where(id => id > 0)
 	                .Distinct()
@@ -332,7 +332,7 @@ namespace NzbDrone.Core.Books
 
 	            if (!distinctIds.Any())
 	            {
-	                return;
+	                return retainedBookFileIds;
 	            }
 
 	            _cache.Clear();
@@ -355,10 +355,11 @@ namespace NzbDrone.Core.Books
 	                        .Where(file => file != null && file.Id > 0)
 	                        .ToList()
 	                    : new List<BookFile>();
-	                var retainedBookFileIds = retainedBookFiles
+	                var authorRetainedBookFileIds = retainedBookFiles
 	                    .Select(file => file.Id)
 	                    .Distinct()
 	                    .ToList();
+	                retainedBookFileIds.AddRange(authorRetainedBookFileIds);
 	                var retainedBookFileEditionIds = retainedBookFiles
 	                    .Where(file => !string.IsNullOrWhiteSpace(file.Edition?.ForeignEditionId))
 	                    .GroupBy(file => file.Id)
@@ -369,12 +370,14 @@ namespace NzbDrone.Core.Books
 	                    deleteFiles,
 	                    addImportListExclusion,
 	                    preserveRetainedFileHistory,
-	                    retainedBookFileIds,
+	                    authorRetainedBookFileIds,
 	                    retainedBookFileEditionIds));
 	                _providerAliasService?.DeleteAliases("Author", author.Id);
 	            }
 
 	            _authorRepository.DeleteMany(authors.Select(author => author.Id));
+
+	            return retainedBookFileIds.Distinct().ToList();
 	        }
 
         public Author FindByProviderId(string provider, string providerId)
@@ -547,39 +550,6 @@ namespace NzbDrone.Core.Books
             }
 
             return normalized.ToString();
-        }
-
-        public List<Tuple<Func<Author, string, double>, string>> ReportAuthorScoringFunctions(string reportTitle, string cleanReportTitle)
-        {
-            Func<Func<Author, string, double>, string, Tuple<Func<Author, string, double>, string>> tc = Tuple.Create;
-            var scoringFunctions = new List<Tuple<Func<Author, string, double>, string>>
-            {
-                // Deterministic match functions - disabled for now
-                // tc((a, t) => _deterministicMatcher.AuthorNamesMatch(t, a.Name) ? 1.0 : 0.0, reportTitle),
-                // tc((a, t) => _deterministicMatcher.AuthorNamesMatch(t, a.NameLastFirst) ? 1.0 : 0.0, reportTitle),
-
-                // Enhanced author matching with initials and name variations
-                tc((a, t) => EnhancedAuthorMatch(a.Name, t), reportTitle),
-                tc((a, t) => EnhancedAuthorMatch(a.NameLastFirst, t), reportTitle),
-
-                // Try with cleaned report title as well
-                tc((a, t) => EnhancedAuthorMatch(a.Name, t), cleanReportTitle)
-            };
-
-            return scoringFunctions;
-        }
-
-        public List<Author> GetReportCandidates(string reportTitle)
-        {
-            var authors = GetAllAuthors();
-            var output = new List<Author>();
-
-            foreach (var func in ReportAuthorScoringFunctions(reportTitle, reportTitle.CleanAuthorName()))
-            {
-                output.AddRange(FindByStringInexact(authors, func.Item1, func.Item2));
-            }
-
-            return output.DistinctBy(x => x.Id).ToList();
         }
 
         private List<Author> FindByStringInexact(List<Author> authors, Func<Author, string, double> scoreFunction, string title)
@@ -1173,123 +1143,6 @@ namespace NzbDrone.Core.Books
             }
         }
 
-        private double EnhancedAuthorMatch(string authorName, string searchName)
-        {
-            if (string.IsNullOrWhiteSpace(authorName) || string.IsNullOrWhiteSpace(searchName))
-            {
-                return 0.0;
-            }
-
-            // Normalize both names
-            var normalizedAuthor = NormalizeAuthorName(authorName);
-            var normalizedSearch = NormalizeAuthorName(searchName);
-
-            // Check for exact match after normalization
-            if (normalizedAuthor.Equals(normalizedSearch, StringComparison.OrdinalIgnoreCase))
-            {
-                return 1.0;
-            }
-
-            // Try initial-based matching
-            var authorParts = normalizedAuthor.Split(' ');
-            var searchParts = normalizedSearch.Split(' ');
-
-            if (authorParts.Length >= 2 && searchParts.Length >= 2)
-            {
-                // Check if last names match (most important)
-                var authorLastName = authorParts[authorParts.Length - 1];
-                var searchLastName = searchParts[searchParts.Length - 1];
-
-                if (!authorLastName.Equals(searchLastName, StringComparison.OrdinalIgnoreCase))
-                {
-                    // Last names don't match, return no match
-                    return 0.0;
-                }
-
-                // Last names match, check first/middle names with initial support
-                var score = 0.5; // Base score for matching last name
-
-                // Check first names
-                if (MatchNameWithInitials(authorParts[0], searchParts[0]))
-                {
-                    score += 0.3;
-                }
-
-                // Check middle names if present
-                if (authorParts.Length > 2 && searchParts.Length > 2)
-                {
-                    if (MatchNameWithInitials(authorParts[1], searchParts[1]))
-                    {
-                        score += 0.2;
-                    }
-                }
-                else if (authorParts.Length == 2 && searchParts.Length == 2)
-                {
-                    // No middle names, give bonus
-                    score += 0.2;
-                }
-
-                return Math.Min(1.0, score);
-            }
-
-            // Fall back to exact matching
-            // DEPRECATED-IDENTIFICATION: Old deterministic matching system
-            // var matcher = new DeterministicMatchingService(_logger);
-            // IDeterministicMatcher matcher = null;
-            // return matcher.AuthorNamesMatch(normalizedAuthor, normalizedSearch) ? 1.0 : 0.0;
-            return normalizedAuthor.Equals(normalizedSearch, StringComparison.OrdinalIgnoreCase) ? 1.0 : 0.0;
-        }
-
-        private string NormalizeAuthorName(string name)
-        {
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                return string.Empty;
-            }
-
-            // Remove titles (Dr., Mr., Mrs., etc.)
-            var normalized = System.Text.RegularExpressions.Regex.Replace(name, @"^(dr\.?|mr\.?|mrs\.?|ms\.?|prof\.?)\s+", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-
-            // Handle "Last, First" format
-            if (normalized.Contains(','))
-            {
-                var parts = normalized.Split(',');
-                if (parts.Length == 2)
-                {
-                    normalized = $"{parts[1].Trim()} {parts[0].Trim()}";
-                }
-            }
-
-            // Remove periods from initials
-            normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"(\b[A-Z])\.", "$1");
-
-            // Normalize whitespace
-            normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"\s+", " ").Trim();
-
-            return normalized;
-        }
-
-        private bool MatchNameWithInitials(string name1, string name2)
-        {
-            if (string.IsNullOrWhiteSpace(name1) || string.IsNullOrWhiteSpace(name2))
-            {
-                return false;
-            }
-
-            // Exact match
-            if (name1.Equals(name2, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-
-            // Check if one is an initial of the other
-            if (name1.Length == 1 || name2.Length == 1)
-            {
-                return char.ToUpperInvariant(name1[0]) == char.ToUpperInvariant(name2[0]);
-            }
-
-            return false;
-        }
 
 	        public void SetMediaTypeMonitoring(int authorId, string mediaType, bool monitored)
 	        {

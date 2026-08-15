@@ -10381,6 +10381,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "moveToCanonicalAuthorFolder",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
           }
         ],
         "responses": {
@@ -10409,6 +10417,26 @@
                   "items": {
                     "$ref": "#/components/schemas/RenameBookResource"
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResource"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResource"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResource"
                 }
               }
             }
@@ -13629,6 +13657,10 @@
             "format": "date-time",
             "nullable": true
           },
+          "added": {
+            "type": "string",
+            "format": "date-time"
+          },
           "pageCount": {
             "type": "integer",
             "format": "int32"
@@ -15757,6 +15789,10 @@
             "items": {
               "$ref": "#/components/schemas/MediaCover"
             },
+            "nullable": true
+          },
+          "selectedPosterHash": {
+            "type": "string",
             "nullable": true
           }
         },
@@ -19011,6 +19047,10 @@
             "type": "integer",
             "format": "int32"
           },
+          "editionId": {
+            "type": "integer",
+            "format": "int32"
+          },
           "bookFileId": {
             "type": "integer",
             "format": "int32"
@@ -19020,6 +19060,13 @@
             "nullable": true
           },
           "newPath": {
+            "type": "string",
+            "nullable": true
+          },
+          "canOrganize": {
+            "type": "boolean"
+          },
+          "reason": {
             "type": "string",
             "nullable": true
           }
