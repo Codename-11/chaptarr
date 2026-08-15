@@ -79,18 +79,86 @@ namespace Chaptarr.Api.V1.Books
                 }
             }
 
-            // 2) Fall back to existing remote search path if nothing local
-            var searchResults = localMatches ?? _searchProxy.SearchForNewBook(term, null);
-
-            // Apply mediaType filter to remote results
-            if (requestedMediaType.HasValue)
-            {
-                searchResults = searchResults.Where(b => b.MediaType == requestedMediaType.Value).ToList();
-            }
+            // 2) Fall back to remote search if nothing local. Text search results are lightweight
+            // Goodreads hits and do not carry authoritative edition formats. Resolve each hit by
+            // its canonical work id before applying mediaType so an ebook is not lost merely
+            // because Book.MediaType defaults to Audiobook on the lightweight result.
+            var searchResults = localMatches ?? SearchRemote(term, requestedMediaType);
 
             var resources = MapToResource(searchResults, facadeContext).ToList();
             BookResourceMapper.WarnFacadeIdentityGaps(resources, facadeContext, "book lookup response");
             return resources;
+        }
+
+        private List<NzbDrone.Core.Books.Book> SearchRemote(string term, BookMediaType? requestedMediaType)
+        {
+            var initialResults = _searchProxy.SearchForNewBook(term, null) ?? new List<NzbDrone.Core.Books.Book>();
+
+            if (IsCanonicalProviderTerm(term))
+            {
+                return FilterByMediaTypeAndAvailability(initialResults, requestedMediaType);
+            }
+
+            var hydratedResults = new List<NzbDrone.Core.Books.Book>();
+            var resolvedWorkIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var initialResult in initialResults.Where(book => book != null))
+            {
+                var canonicalWorkId = BookIdentity.GetStableWorkProviderIdentityTokens(initialResult)
+                    .FirstOrDefault();
+
+                // A lightweight result without a provider-owned work identity cannot be resolved
+                // authoritatively. Do not guess its media type from the enum default.
+                if (string.IsNullOrWhiteSpace(canonicalWorkId) || !resolvedWorkIds.Add(canonicalWorkId))
+                {
+                    continue;
+                }
+
+                var canonicalResults = _searchProxy.SearchForNewBook(canonicalWorkId, null) ?? new List<NzbDrone.Core.Books.Book>();
+                hydratedResults.AddRange(FilterByMediaTypeAndAvailability(canonicalResults, requestedMediaType));
+            }
+
+            return hydratedResults
+                .Where(book => book != null)
+                .GroupBy(book => $"{BookIdentity.GetStableWorkProviderIdentityTokens(book).FirstOrDefault() ?? book.TitleSlug ?? book.Title}|{book.MediaType}", StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .ToList();
+        }
+
+        private static List<NzbDrone.Core.Books.Book> FilterByMediaTypeAndAvailability(IEnumerable<NzbDrone.Core.Books.Book> books, BookMediaType? requestedMediaType)
+        {
+            return books?
+                .Where(book => book != null &&
+                               (!requestedMediaType.HasValue || book.MediaType == requestedMediaType.Value) &&
+                               HasAuthoritativeMediaEdition(book))
+                .ToList() ?? new List<NzbDrone.Core.Books.Book>();
+        }
+
+        private static bool HasAuthoritativeMediaEdition(NzbDrone.Core.Books.Book book)
+        {
+            return book?.Editions?.Any(edition =>
+                edition != null &&
+                (book.MediaType == BookMediaType.Ebook
+                    ? edition.ReadingFormatId == 3 || edition.IsEbook
+                    : edition.ReadingFormatId == 2 ||
+                      !string.IsNullOrWhiteSpace(edition.AudibleASIN) ||
+                      edition.DurationSeconds.GetValueOrDefault() > 0)) == true;
+        }
+
+        private static bool IsCanonicalProviderTerm(string term)
+        {
+            if (string.IsNullOrWhiteSpace(term))
+            {
+                return false;
+            }
+
+            var separator = term.IndexOf(':');
+            if (separator <= 0 || separator >= term.Length - 1 || term.IndexOf(':', separator + 1) >= 0)
+            {
+                return false;
+            }
+
+            return ProviderIdHelper.IsCanonicalPrefix(term.Substring(0, separator).Trim().ToLowerInvariant());
         }
 
         private List<NzbDrone.Core.Books.Book> LookupLocalByProviderOrEdition(string term, BookMediaType? requestedMediaType)

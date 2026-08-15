@@ -110,6 +110,69 @@ namespace Chaptarr.Core.Test.Api
             }
         }
 
+        private class SearchProxy : DispatchProxy
+        {
+            public readonly List<string> Terms = new();
+
+            protected override object Invoke(MethodInfo targetMethod, object[] args)
+            {
+                if (targetMethod?.Name != nameof(ISearchForNewBook.SearchForNewBook))
+                {
+                    throw new NotImplementedException($"Unexpected ISearchForNewBook.{targetMethod?.Name}");
+                }
+
+                var term = (string)args[0];
+                Terms.Add(term);
+
+                return term switch
+                {
+                    "query" => new List<Book>
+                    {
+                        SearchBook("gr:1", BookMediaType.Audiobook),
+                        SearchBook("gr:2", BookMediaType.Audiobook)
+                    },
+                    "gr:1" => new List<Book>
+                    {
+                        SearchBook("hc:101", BookMediaType.Audiobook),
+                        SearchBook("hc:101", BookMediaType.Ebook)
+                    },
+                    "gr:2" => new List<Book>
+                    {
+                        SearchBook("hc:202", BookMediaType.Audiobook)
+                    },
+                    "gr:physical" => new List<Book>
+                    {
+                        SearchBook("hc:303", BookMediaType.Audiobook, 1),
+                        SearchBook("hc:303", BookMediaType.Ebook, 1)
+                    },
+                    _ => new List<Book>()
+                };
+            }
+
+            private static Book SearchBook(string providerId, BookMediaType mediaType, int? readingFormatId = null)
+            {
+                var book = new Book
+                {
+                    Title = providerId,
+                    MediaType = mediaType,
+                    GoodreadsWorkId = providerId.StartsWith("gr:", StringComparison.Ordinal) ? providerId : null,
+                    HardcoverBookId = providerId.StartsWith("hc:", StringComparison.Ordinal) ? providerId : null
+                };
+                var canonicalResult = providerId.StartsWith("hc:", StringComparison.Ordinal);
+                book.Editions = canonicalResult
+                    ? new List<Edition>
+                    {
+                        new()
+                        {
+                            ReadingFormatId = readingFormatId ?? (mediaType == BookMediaType.Audiobook ? 2 : 3),
+                            IsEbook = (readingFormatId ?? (mediaType == BookMediaType.Audiobook ? 2 : 3)) == 3
+                        }
+                    }
+                    : new List<Edition>();
+                return book;
+            }
+        }
+
         [Test]
         public void should_normalize_work_terms_by_readarr_facade_dialect_only()
         {
@@ -192,6 +255,97 @@ namespace Chaptarr.Core.Test.Api
             Assert.That(bookProxy.SingularLookupCalled, Is.False);
             Assert.That(bookProxy.FindAllCalls.Select(call => call.Provider).ToList(), Is.EqualTo(new List<string> { "isbn", "isbn" }));
             Assert.That(bookProxy.FindAllCalls.Select(call => call.MediaType).ToList(), Is.EqualTo(new List<BookMediaType> { BookMediaType.Audiobook, BookMediaType.Ebook }));
+        }
+
+        [Test]
+        public void text_lookup_should_hydrate_canonical_works_before_filtering_to_ebook()
+        {
+            var search = DispatchProxy.Create<ISearchForNewBook, SearchProxy>();
+            var searchProxy = (SearchProxy)(object)search;
+            var controller = new BookLookupController(
+                searchProxy: search,
+                coverMapper: null,
+                bookService: null,
+                editionService: null,
+                mediaFileService: null,
+                mediaCoverProxy: null,
+                providerAliasService: null);
+            var method = typeof(BookLookupController).GetMethod("SearchRemote", BindingFlags.Instance | BindingFlags.NonPublic);
+
+            Assert.That(method, Is.Not.Null, "Book lookup should have a dedicated canonical remote-search path");
+            var result = (List<Book>)method.Invoke(controller, new object[] { "query", BookMediaType.Ebook });
+
+            Assert.That(result.Select(book => (book.HardcoverBookId, book.MediaType)).ToList(),
+                Is.EqualTo(new[] { ("hc:101", BookMediaType.Ebook) }));
+            Assert.That(searchProxy.Terms, Is.EqualTo(new[] { "query", "gr:1", "gr:2" }));
+        }
+
+        [Test]
+        public void unscoped_text_lookup_should_return_authoritative_available_media_instances()
+        {
+            var search = DispatchProxy.Create<ISearchForNewBook, SearchProxy>();
+            var controller = new BookLookupController(
+                searchProxy: search,
+                coverMapper: null,
+                bookService: null,
+                editionService: null,
+                mediaFileService: null,
+                mediaCoverProxy: null,
+                providerAliasService: null);
+            var method = typeof(BookLookupController).GetMethod("SearchRemote", BindingFlags.Instance | BindingFlags.NonPublic);
+
+            Assert.That(method, Is.Not.Null, "Book lookup should have a dedicated canonical remote-search path");
+            var result = (List<Book>)method.Invoke(controller, new object[] { "query", null });
+
+            Assert.That(result.Select(book => (book.HardcoverBookId, book.MediaType)).ToList(),
+                Is.EqualTo(new[]
+                {
+                    ("hc:101", BookMediaType.Audiobook),
+                    ("hc:101", BookMediaType.Ebook),
+                    ("hc:202", BookMediaType.Audiobook)
+                }));
+        }
+
+        [Test]
+        public void provider_prefixed_lookup_should_not_repeat_canonical_hydration()
+        {
+            var search = DispatchProxy.Create<ISearchForNewBook, SearchProxy>();
+            var searchProxy = (SearchProxy)(object)search;
+            var controller = new BookLookupController(
+                searchProxy: search,
+                coverMapper: null,
+                bookService: null,
+                editionService: null,
+                mediaFileService: null,
+                mediaCoverProxy: null,
+                providerAliasService: null);
+            var method = typeof(BookLookupController).GetMethod("SearchRemote", BindingFlags.Instance | BindingFlags.NonPublic);
+
+            Assert.That(method, Is.Not.Null, "Book lookup should have a dedicated canonical remote-search path");
+            var result = (List<Book>)method.Invoke(controller, new object[] { "gr:1", BookMediaType.Ebook });
+
+            Assert.That(result.Select(book => book.MediaType).ToList(), Is.EqualTo(new[] { BookMediaType.Ebook }));
+            Assert.That(searchProxy.Terms, Is.EqualTo(new[] { "gr:1" }));
+        }
+
+        [Test]
+        public void canonical_lookup_should_not_invent_media_instances_from_physical_editions()
+        {
+            var search = DispatchProxy.Create<ISearchForNewBook, SearchProxy>();
+            var controller = new BookLookupController(
+                searchProxy: search,
+                coverMapper: null,
+                bookService: null,
+                editionService: null,
+                mediaFileService: null,
+                mediaCoverProxy: null,
+                providerAliasService: null);
+            var method = typeof(BookLookupController).GetMethod("SearchRemote", BindingFlags.Instance | BindingFlags.NonPublic);
+
+            Assert.That(method, Is.Not.Null, "Book lookup should have a dedicated canonical remote-search path");
+            var result = (List<Book>)method.Invoke(controller, new object[] { "gr:physical", null });
+
+            Assert.That(result, Is.Empty);
         }
 
         [Test]
