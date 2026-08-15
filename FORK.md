@@ -10,11 +10,13 @@ This repository is a maintained deployment fork of [Chaptarr/chaptarr](https://g
 
 The fork's default branch is `deploy` so operational builds and GitHub workflow discovery resolve to the deployed source. Upstream pull requests must still target `Chaptarr/chaptarr:develop` from focused branches based on the clean `develop` mirror.
 
-## Current local carry
+## Current local carries
 
 `deploy` currently carries the `Only This Book` catalog-isolation fix proposed upstream in [Chaptarr/chaptarr#37](https://github.com/Chaptarr/chaptarr/pull/37).
 
 The fix keeps unrelated author titles out of the local catalog when a new author is added with `Only This Book`, while preserving the selected title through Chaptarr's existing manual-add path.
+
+`deploy` also carries the media-specific text lookup fix from `fix/book-lookup-media-types` (`d24f9bd`). The focused branch is ready for upstream review but has not been submitted. It resolves lightweight Goodreads search hits through their canonical work records before filtering by media type, and only returns ebook or audiobook instances backed by matching edition metadata.
 
 ## Upstream sync
 
