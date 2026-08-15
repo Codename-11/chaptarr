@@ -140,9 +140,7 @@ namespace Chaptarr.Api.V1.Books
                 edition != null &&
                 (book.MediaType == BookMediaType.Ebook
                     ? edition.ReadingFormatId == 3 || edition.IsEbook
-                    : edition.ReadingFormatId == 2 ||
-                      !string.IsNullOrWhiteSpace(edition.AudibleASIN) ||
-                      edition.DurationSeconds.GetValueOrDefault() > 0)) == true;
+                    : edition.ReadingFormatId == 2 || edition.DurationSeconds.GetValueOrDefault() > 0)) == true;
         }
 
         private static bool IsCanonicalProviderTerm(string term)
