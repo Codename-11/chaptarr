@@ -142,14 +142,14 @@ namespace Chaptarr.Core.Test.Api
                     },
                     "gr:physical" => new List<Book>
                     {
-                        SearchBook("hc:303", BookMediaType.Audiobook, 1),
-                        SearchBook("hc:303", BookMediaType.Ebook, 1)
+                        SearchBook("hc:303", BookMediaType.Audiobook, 3, "B08STALEID"),
+                        SearchBook("hc:303", BookMediaType.Ebook, 3, "B08STALEID")
                     },
                     _ => new List<Book>()
                 };
             }
 
-            private static Book SearchBook(string providerId, BookMediaType mediaType, int? readingFormatId = null)
+            private static Book SearchBook(string providerId, BookMediaType mediaType, int? readingFormatId = null, string audibleAsin = null)
             {
                 var book = new Book
                 {
@@ -165,7 +165,8 @@ namespace Chaptarr.Core.Test.Api
                         new()
                         {
                             ReadingFormatId = readingFormatId ?? (mediaType == BookMediaType.Audiobook ? 2 : 3),
-                            IsEbook = (readingFormatId ?? (mediaType == BookMediaType.Audiobook ? 2 : 3)) == 3
+                            IsEbook = (readingFormatId ?? (mediaType == BookMediaType.Audiobook ? 2 : 3)) == 3,
+                            AudibleASIN = audibleAsin
                         }
                     }
                     : new List<Edition>();
@@ -329,7 +330,7 @@ namespace Chaptarr.Core.Test.Api
         }
 
         [Test]
-        public void canonical_lookup_should_not_invent_media_instances_from_physical_editions()
+        public void canonical_lookup_should_not_invent_audiobook_from_ebook_with_stale_audible_id()
         {
             var search = DispatchProxy.Create<ISearchForNewBook, SearchProxy>();
             var controller = new BookLookupController(
@@ -343,7 +344,7 @@ namespace Chaptarr.Core.Test.Api
             var method = typeof(BookLookupController).GetMethod("SearchRemote", BindingFlags.Instance | BindingFlags.NonPublic);
 
             Assert.That(method, Is.Not.Null, "Book lookup should have a dedicated canonical remote-search path");
-            var result = (List<Book>)method.Invoke(controller, new object[] { "gr:physical", null });
+            var result = (List<Book>)method.Invoke(controller, new object[] { "gr:physical", BookMediaType.Audiobook });
 
             Assert.That(result, Is.Empty);
         }
